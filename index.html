@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>时间账本 · 我的一天</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap top-inner">
+    <div class="brand"><span class="logo" aria-hidden="true"></span>时间账本</div>
+    <nav class="tabs" role="tablist">
+      <a href="#day" data-tab="day">我的一天</a>
+      <a href="#methods" data-tab="methods">方法库</a>
+      <a href="#progress" data-tab="progress">进度</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap" id="app"></main>
+<footer class="wrap foot">
+  <span>数据只存在本机浏览器。</span>
+  <button class="link" id="exportBtn">导出备份</button>
+  <label class="link">导入备份<input type="file" id="importInput" accept="application/json" hidden></label>
+</footer>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
