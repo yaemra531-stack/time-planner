@@ -2,26 +2,50 @@
   const C = window.CONFIG;
   const KEY = "timeLedger.v1";
   const UNITS = C.schedule.filter(b => b.unit);
-  const ALL_SECS = C.books.flatMap(b => b.sections);
+  const LEVELS = ["熟练", "摸索中", "新手"];
+  const DEFAULTS = () => ({ days: {}, methods: {}, units: {}, review: {}, ideas: [], timer: null, journal: {} });
   let state = load();
+  let timerEndShown = false;
   const app = document.getElementById("app");
 
   function load() {
-    try { return Object.assign({ days: {}, methods: {} }, JSON.parse(localStorage.getItem(KEY)) || {}); }
-    catch { return { days: {}, methods: {} }; }
+    try { return Object.assign(DEFAULTS(), JSON.parse(localStorage.getItem(KEY)) || {}); }
+    catch { return DEFAULTS(); }
   }
   function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
   const pad = n => String(n).padStart(2, "0");
   const keyOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const today = () => keyOf(new Date());
   const day = k => (state.days[k] ||= { done: {} });
+  const rev = k => (state.review[k] ||= { units: {} });
   const toMin = s => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const WEEK = "日一二三四五六";
+  const isSunday = () => new Date().getDay() === 0;
+
+  // 单位信息：data.js 的默认值 + 网页上的修改
+  const unitOf = uid => {
+    const b = UNITS.find(u => u.unit === uid);
+    return Object.assign({}, b, state.units[uid] || {});
+  };
+  const doneDays = uid => Object.values(state.days).filter(d => d.done?.[uid]).length;
+  const keptDays = uid => (unitOf(uid).baseDays || 0) + doneDays(uid);
+  const unitMinutes = uid => unitOf(uid).minutes || 45;
 
   function toast(msg) {
     const t = document.createElement("div"); t.className = "toast"; t.textContent = msg;
-    document.body.appendChild(t); setTimeout(() => t.remove(), 1800);
+    document.body.appendChild(t); setTimeout(() => t.remove(), 2200);
+  }
+  function beep() {
+    try {
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.45, 0.9].forEach(t => {
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.frequency.value = 880; o.connect(g); g.connect(ac.destination);
+        g.gain.setValueAtTime(0.2, ac.currentTime + t); g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + t + 0.35);
+        o.start(ac.currentTime + t); o.stop(ac.currentTime + t + 0.4);
+      });
+    } catch {}
   }
 
   function blockAt(min) {
@@ -40,7 +64,7 @@
     return `<svg class="ring" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
       <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--border)" stroke-width="5"/>
       <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--blue)" stroke-width="5" stroke-linecap="round"
-        stroke-dasharray="${c * pct} ${c}" transform="rotate(-90 28 28)"/></svg>`;
+        stroke-dasharray="${c * Math.max(0, Math.min(1, pct))} ${c}" transform="rotate(-90 28 28)"/></svg>`;
   }
 
   function sysLinks(ids = []) {
@@ -50,141 +74,283 @@
       return s.url ? `<a href="${s.url}" target="_blank" rel="noopener">${esc(s.name)} ↗</a>` : `<span>${esc(s.name)}</span>`;
     }).join("")}</div>`;
   }
+  const levelCls = l => ({ "熟练": "lv-ok", "摸索中": "lv-mid", "新手": "lv-new" }[l] || "lv-mid");
+
+  // ---------- 计时器 ----------
+  const timerLeft = () => state.timer ? Math.max(0, Math.round((state.timer.endAt - Date.now()) / 1000)) : 0;
+  const fmt = s => `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+  function startTimer(uid) {
+    state.timer = { unit: uid, endAt: Date.now() + unitMinutes(uid) * 60000, total: unitMinutes(uid) * 60 };
+    timerEndShown = false; save(); renderDay();
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+  }
+  function stopTimer(ask) {
+    const uid = state.timer?.unit;
+    state.timer = null; save();
+    if ((location.hash || "#day") === "#day") renderDay();
+    if (ask && uid) showStop(uid);
+  }
+  function tick() {
+    if (!state.timer) return;
+    const s = timerLeft();
+    document.querySelectorAll("[data-countdown]").forEach(el => el.textContent = fmt(s));
+    const rg = document.querySelector(".now .ring circle:last-child");
+    if (rg) {
+      const c = 2 * Math.PI * 22, pct = 1 - s / (state.timer.total || 2700);
+      rg.setAttribute("stroke-dasharray", `${c * pct} ${c}`);
+    }
+    document.title = `${fmt(s)} · ${unitOf(state.timer.unit).title}`;
+    if (s === 0 && !timerEndShown) {
+      timerEndShown = true; beep();
+      const u = unitOf(state.timer.unit);
+      if ("Notification" in window && Notification.permission === "granted") {
+        try { new Notification("时间到，停。", { body: `${u.no} ${u.title}：写下卡在哪，然后休息。` }); } catch {}
+      }
+      stopTimer(true);
+    }
+  }
+  setInterval(tick, 1000);
+
+  // 闹钟响了就停：写下卡在哪 + 下次第一步
+  function showStop(uid) {
+    const u = unitOf(uid), dd = day(today());
+    document.title = "时间账本 · 我的一天";
+    const m = document.createElement("div");
+    m.className = "modal"; m.setAttribute("role", "dialog"); m.setAttribute("aria-modal", "true");
+    m.innerHTML = `<div class="sheet">
+      <div class="label">${u.no} ${esc(u.title)}</div>
+      <h3>时间到，停。</h3>
+      <p class="small">没干完也停。写两句话，下次接着干就不用犹豫。</p>
+      <label class="chk"><input type="checkbox" id="mDone" ${dd.done[uid] ? "checked" : ""}> 保底量「${esc(u.quota)}」做完了</label>
+      <label>卡在哪（做完了可以不填）<input type="text" id="mStuck" placeholder="例如：要点 24 的翻译练习做到第 3 句"></label>
+      <label>下次第一步<input type="text" id="mNext" placeholder="例如：从第 4 句开始翻译"></label>
+      <div class="row"><button class="btn primary" id="mSave">保存，去休息</button><button class="btn" id="mSkip">跳过</button></div>
+    </div>`;
+    document.body.appendChild(m);
+    m.querySelector("#mStuck").focus();
+    const close = () => { m.remove(); if ((location.hash || "#day") === "#day") renderDay(); };
+    m.querySelector("#mSave").onclick = () => {
+      dd.done[uid] = m.querySelector("#mDone").checked;
+      const stuck = m.querySelector("#mStuck").value.trim(), first = m.querySelector("#mNext").value.trim();
+      const o = (state.units[uid] ||= {});
+      o.next = stuck || first ? { stuck, first, at: today() } : null;
+      save(); close(); toast("已记下。彻底歇一会儿。");
+    };
+    m.querySelector("#mSkip").onclick = close;
+  }
 
   // ---------- 我的一天 ----------
+  function unitCard(b, k) {
+    const uid = b.unit, u = unitOf(uid), on = day(k).done[uid];
+    const running = state.timer?.unit === uid;
+    const next = u.next && (u.next.stuck || u.next.first) ? `<div class="next"><b>下次从这里开始</b>
+      ${u.next.stuck ? `<div>卡在：${esc(u.next.stuck)}</div>` : ""}${u.next.first ? `<div>第一步：${esc(u.next.first)}</div>` : ""}
+      <button class="link" data-clearnext="${uid}">已接上，清掉</button></div>` : "";
+    return `<div class="unitrow"><div class="ucol">
+        <div class="t-title">${u.no} ${esc(u.title)}
+          <span class="badge ${levelCls(u.level)}">${esc(u.level)}</span>
+          <span class="kept">${keptDays(uid) ? `已坚持 ${keptDays(uid)} 天` : "刚开始"}</span></div>
+        <dl class="facts"><dt>保底</dt><dd>${esc(u.quota)}</dd>${next ? "" : `<dt>第一步</dt><dd>${esc(u.first)}</dd>`}</dl>
+        ${next}
+        ${sysLinks(b.systems)}
+        <div class="row">
+          ${running ? `<button class="btn run" data-stop>■ 停止 <span data-countdown>${fmt(timerLeft())}</span></button>`
+                    : `<button class="btn" data-start="${uid}" ${state.timer ? "disabled" : ""}>▶ 开始 ${unitMinutes(uid)} 分钟</button>`}
+        </div></div>
+      <button class="check ${on ? "on" : ""}" data-unit="${uid}" aria-pressed="${!!on}" aria-label="完成 ${esc(u.title)}">✓</button></div>`;
+  }
+
   function renderDay() {
     const d = new Date(), k = today(), min = d.getHours() * 60 + d.getMinutes();
     const cur = blockAt(min), n = doneCount(k);
     let nowCard = "";
-    if (cur) {
+    if (state.timer) {
+      const u = unitOf(state.timer.unit), s = timerLeft();
+      nowCard = `<section class="now timer" aria-live="off">${ring(1 - s / (state.timer.total || 2700))}
+        <div><div class="label">计时中 · 时间是上限，数字是下限</div>
+        <div class="what">${u.no} ${esc(u.title)}</div>
+        <div class="small">保底：${esc(u.quota)}。做完了可以继续做同一件事，直到闹钟响。</div></div>
+        <div class="left">还剩<b data-countdown>${fmt(s)}</b><button class="link" data-stop>提前停止</button></div></section>`;
+    } else if (cur) {
+      const u = cur.unit ? unitOf(cur.unit) : cur;
       const left = remaining(cur, min), total = (toMin(cur.end) - toMin(cur.start) + 1440) % 1440 || 1440;
-      nowCard = `<section class="now" aria-live="polite">
+      const nf = u.next?.first || u.first;
+      nowCard = `<section class="now ${cur.rest ? "rest" : ""}" aria-live="polite">
         ${cur.unit ? ring(1 - left / total) : ""}
         <div><div class="label">现在 · ${cur.start}–${cur.end}</div>
         <div class="what">${cur.no ? cur.no + " " : ""}${esc(cur.title)}</div>
-        ${cur.quota ? `<div class="small">${esc(cur.quota)}</div>` : ""}</div>
-        <div class="left">还剩<b>${left} 分钟</b></div></section>`;
+        ${cur.unit ? `<div class="small">第一步：${esc(nf)}</div>` : cur.note ? `<div class="small">${esc(cur.note)}</div>` : ""}
+        ${cur.unit && !day(k).done[cur.unit] ? `<button class="btn primary go" data-start="${cur.unit}">▶ 开始 ${unitMinutes(cur.unit)} 分钟</button>` : ""}</div>
+        <div class="left">这一段还剩<b>${left} 分钟</b></div></section>`;
     }
     const items = C.schedule.map(b => {
       const on = b.unit && day(k).done[b.unit];
-      const cls = ["tl", b.unit && "unit", on && "done", b === cur && "cur"].filter(Boolean).join(" ");
-      const inner = `<div class="t-title">${b.no ? b.no + " " : ""}${esc(b.title)}</div>
-        ${b.quota ? `<div class="quota">${esc(b.quota)}</div>` : ""}${sysLinks(b.systems)}`;
-      return `<li class="${cls}"><div class="time">${b.start}–${b.end}</div>
-        <div class="body">${b.unit ? `<div class="unitrow"><div style="flex:1;min-width:0">${inner}</div>
-        <button class="check ${on ? "on" : ""}" data-unit="${b.unit}" aria-pressed="${!!on}" aria-label="完成 ${esc(b.title)}">✓</button></div>` : inner}</div></li>`;
+      const cls = ["tl", b.unit && "unit", b.rest && "rest", on && "done", b === cur && "cur"].filter(Boolean).join(" ");
+      const body = b.unit ? unitCard(b, k)
+        : `<div class="t-title">${esc(b.title)}${b.rest ? ` <span class="badge lv-rest">休息</span>` : ""}</div>
+           ${b.note ? `<div class="quota">${esc(b.note)}</div>` : ""}${sysLinks(b.systems)}`;
+      return `<li class="${cls}"><div class="time">${b.start}–${b.end}</div><div class="body">${body}</div></li>`;
     }).join("");
     app.innerHTML = `<h1>我的一天</h1>
-      <p class="sub">${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${WEEK[d.getDay()]} · 今天完成 ${n}/${UNITS.length} 个单位</p>
+      <p class="sub">${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${WEEK[d.getDay()]} · 今天完成 ${n}/${UNITS.length} 个单位
+        ${d.getHours() >= 21 ? ` · <a href="#review">去复盘 →</a>` : ""}</p>
       ${nowCard}<ol class="timeline">${items}</ol>
-      <p class="rule"><b>两条规则：</b>每天在单位 ⑦ 里记一行数据；漏了不补，第二天照常。</p>`;
-    app.querySelectorAll(".check").forEach(btn => btn.onclick = () => {
-      const dd = day(k); dd.done[btn.dataset.unit] = !dd.done[btn.dataset.unit]; save(); renderDay();
+      <section class="rules"><h2>三条红线</h2><ol>
+        <li><b>闹钟响了就停。</b>没干完也停，写下卡在哪和下次第一步。</li>
+        <li><b>连续两个 45 分钟后，彻底歇 30 分钟。</b>离开屏幕。</li>
+        <li><b>新想法先放 48 小时。</b>要加一件，先划掉一件。<a href="#review">放进冷却区 →</a></li>
+      </ol><p class="small">平时埋头干，规则周日再改。漏了不补，第二天照常。</p></section>`;
+    bindDay(k);
+  }
+
+  function bindDay(k) {
+    const on = (sel, fn) => app.querySelectorAll(sel).forEach(el => el.onclick = () => fn(el));
+    on(".check", btn => { const dd = day(k); dd.done[btn.dataset.unit] = !dd.done[btn.dataset.unit]; save(); renderDay(); });
+    on("[data-start]", b => startTimer(b.dataset.start));
+    on("[data-stop]", () => stopTimer(true));
+    on("[data-clearnext]", b => { if (state.units[b.dataset.clearnext]) state.units[b.dataset.clearnext].next = null; save(); renderDay(); });
+  }
+
+  // ---------- 定量 ----------
+  const lastDays = n => Array.from({ length: n }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - i); return keyOf(d); });
+  const num = v => v === "" || v == null ? null : Number(v);
+  function metricInfo(m) {
+    const rows = Object.keys(state.days).sort().map(k => ({ k, v: state.days[k][m.key] })).filter(r => r.v != null && r.v !== "");
+    if (m.sum) { const t = rows.reduce((s, r) => s + Number(r.v), 0); return { text: m.total ? `${m.totalLabel} ${t}/${m.total}` : `累计 ${t} ${m.suffix}`, pct: m.total ? t / m.total : null }; }
+    if (m.latest) { const v = rows.length ? Math.max(...rows.map(r => Number(r.v))) : m.base; return { text: `${m.totalLabel} ${v}/${m.total}`, pct: v / m.total }; }
+    if (m.trend) { const last = rows.slice(-7).map(r => r.v + m.suffix); return { text: last.length ? `最近 ${last.length} 次：${last.join(" · ")}${m.target ? `（目标 ${m.target}%）` : ""}` : "还没有记录", pct: null }; }
+    return { text: "", pct: null };
+  }
+  let editingQ = null;
+  function renderQuota() {
+    const k = today(), dd = day(k), sun = isSunday();
+    const cards = UNITS.map(b => {
+      const uid = b.unit, u = unitOf(uid), o = state.units[uid] || {}, log = (o.log || []).slice().reverse();
+      const week = lastDays(7).filter(x => state.days[x]?.done?.[uid]).length;
+      const metrics = (u.metrics || []).map(m => {
+        const info = metricInfo(m);
+        return `<div class="metric"><label>${m.label}<span class="inline"><input type="number" min="0" data-metric="${m.key}" value="${dd[m.key] ?? ""}" placeholder="${m.latest ? "例如 " + (metricInfo(m).text.match(/\d+/)?.[0] || "") : ""}">${m.suffix ? `<span>${m.suffix}</span>` : ""}</span></label>
+          <div class="small">${esc(info.text)}</div>${info.pct != null ? `<div class="bar green"><i style="width:${Math.min(100, info.pct * 100)}%"></i></div>` : ""}</div>`;
+      }).join("");
+      const edit = editingQ === uid ? `<div class="edit qedit" data-qedit="${uid}">
+          <label>保底量（明确数字）<input type="text" data-k="quota" value="${esc(u.quota)}"></label>
+          <label>范围（还没定死就写个范围；定死了就清空）<input type="text" data-k="range" value="${esc(u.range)}"></label>
+          <label>熟练度<select data-k="level">${LEVELS.map(l => `<option ${l === u.level ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label>为什么改（一句话）<input type="text" data-k="why" placeholder="例如：连续 4 天提前完成"></label>
+          <div class="row"><button class="btn primary" data-qsave="${uid}">保存</button><button class="btn" data-qcancel>取消</button></div></div>` : "";
+      return `<section class="qcard" id="q-${uid}">
+        <div class="qhead"><div class="t-title">${u.no} ${esc(u.title)}
+          <span class="badge ${levelCls(u.level)}">${esc(u.level)}</span>
+          <span class="badge ${u.range ? "lv-try" : "lv-fix"}">${u.range ? "试行中" : "已确定"}</span></div>
+          <div class="small">${b.start}–${b.end} · ${keptDays(uid) ? `已坚持 ${keptDays(uid)} 天` : "刚开始"} · 近 7 天完成 ${week}/7</div></div>
+        <dl class="facts big"><dt>保底</dt><dd><b>${esc(u.quota)}</b></dd>
+          ${u.range ? `<dt>范围</dt><dd>${esc(u.range)}</dd>` : ""}</dl>
+        ${editingQ === uid ? edit : `<button class="link" data-qedit-open="${uid}">改保底量 / 范围 / 熟练度</button>`}
+        <label class="first">第一步（随时改，下次照着做）<input type="text" data-first="${uid}" value="${esc(u.first)}"></label>
+        ${metrics ? `<div class="metrics">${metrics}</div>` : ""}
+        ${log.length ? `<details class="qlog"><summary>调整记录（${log.length}）</summary><ul>${log.map(l => `<li><span class="small">${l.date}</span> ${esc(l.what)}${l.why ? `<div class="small">原因：${esc(l.why)}</div>` : ""}</li>`).join("")}</ul></details>` : ""}
+      </section>`;
+    }).join("");
+    app.innerHTML = `<h1>定量</h1>
+      <p class="sub">每块干多少。能定的写死，定不了的先给个范围，用着再收紧。今天的数据也在这里记。</p>
+      <div class="banner ${sun ? "sun" : ""}">${sun ? "<b>今天周日：可以改规则。</b>每块最多改一处，改完写一句原因。"
+        : "<b>第一步随时改；保底量、范围、熟练度最好留到周日改。</b>真要改也行，写一句原因。"}</div>
+      <div class="qgrid">${cards}</div>`;
+    bindQuota(k);
+  }
+  function bindQuota(k) {
+    const on = (sel, fn) => app.querySelectorAll(sel).forEach(el => el.onclick = () => fn(el));
+    app.querySelectorAll("[data-metric]").forEach(i => i.onchange = () => { day(k)[i.dataset.metric] = num(i.value); save(); toast("已记下"); renderQuota(); });
+    app.querySelectorAll("[data-first]").forEach(i => i.onchange = () => {
+      const uid = i.dataset.first, v = i.value.trim(), o = (state.units[uid] ||= {});
+      if (!v) { i.value = unitOf(uid).first; return; }
+      o.first = v; save(); toast("第一步已更新");
+    });
+    on("[data-qedit-open]", b => { editingQ = b.dataset.qeditOpen; renderQuota(); document.querySelector(`#q-${editingQ} input`)?.focus(); });
+    on("[data-qcancel]", () => { editingQ = null; renderQuota(); });
+    on("[data-qsave]", b => {
+      const uid = b.dataset.qsave, box = app.querySelector(`[data-qedit="${uid}"]`), u = unitOf(uid), o = (state.units[uid] ||= {});
+      const val = key => box.querySelector(`[data-k="${key}"]`).value.trim();
+      const why = val("why"), changes = [];
+      [["quota", "保底"], ["range", "范围"], ["level", "熟练度"]].forEach(([key, name]) => {
+        const v = val(key); if (key === "quota" && !v) return;
+        if ((u[key] || "") !== v) { changes.push(`${name}：${u[key] || "（无）"} → ${v || "（无，已确定）"}`); o[key] = v; }
+      });
+      if (changes.length) { (o.log ||= []).push({ date: today(), what: changes.join("；"), why }); save(); toast("已改，记进调整记录"); }
+      editingQ = null; renderQuota();
     });
   }
 
-  // ---------- 方法库 ----------
-  const FIELDS = [["core", "核心观点"], ["how", "具体方法和步骤"], ["practice", "我打算怎么练"], ["quota", "每天的固定量"]];
-  let openSec = null;
-  function renderMethods() {
-    const doneAll = ALL_SECS.filter(s => state.methods[s.id]?.done).length;
-    app.innerHTML = `<h1>方法库</h1>
-      <p class="sub">先把两本书的方法过一遍，每节整理成一张方法卡。已过 ${doneAll}/${ALL_SECS.length} 节。</p>
-      <div class="books">${C.books.map(book => {
-        const done = book.sections.filter(s => state.methods[s.id]?.done).length;
-        return `<section class="book"><h3>${esc(book.name)}</h3>
-          <p class="idea">${esc(book.idea)}</p>
-          <div class="small">单位 ${book.unit} · 已过 ${done}/${book.sections.length}</div>
-          <div class="bar green"><i style="width:${done / book.sections.length * 100}%"></i></div>
-          <ul class="secs">${book.sections.map(s => {
-            const m = state.methods[s.id] || {}, filled = FIELDS.some(([f]) => m[f]);
-            const open = openSec === s.id;
-            return `<li class="sec ${m.done ? "done" : ""} ${filled ? "filled" : ""}">
-              <button class="head" data-sec="${s.id}" aria-expanded="${open}"><span class="dot" aria-hidden="true"></span>
-              <span>${esc(s.title)}</span><span class="st">${m.done ? "已过" : filled ? "整理中" : "未开始"}</span></button>
-              ${open ? `<div class="card">${FIELDS.map(([f, l]) => `<label>${l}<textarea data-f="${f}" data-id="${s.id}">${esc(m[f])}</textarea></label>`).join("")}
-                <div><button class="btn ${m.done ? "ok" : "primary"}" data-done="${s.id}">${m.done ? "✓ 已过，点击撤销" : "标记为已过"}</button></div></div>` : ""}
-            </li>`;
-          }).join("")}</ul></section>`;
-      }).join("")}</div>`;
-    app.querySelectorAll("button.head").forEach(b => b.onclick = () => { openSec = openSec === b.dataset.sec ? null : b.dataset.sec; renderMethods(); });
-    app.querySelectorAll("textarea[data-f]").forEach(t => t.oninput = () => {
-      (state.methods[t.dataset.id] ||= {})[t.dataset.f] = t.value; save();
+  // ---------- 复盘 ----------
+  const jr = k => (state.journal[k] ||= {});
+  function aiText(k) {
+    const d = new Date(), dd = day(k), j = jr(k);
+    const lines = [`【时间账本 · ${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]} · 今晚复盘】`, `完成 ${doneCount(k)}/${UNITS.length} 个单位`, ""];
+    UNITS.forEach(b => {
+      const u = unitOf(b.unit), week = lastDays(7).filter(x => state.days[x]?.done?.[b.unit]).length;
+      const data = (u.metrics || []).filter(m => dd[m.key] != null).map(m => `${m.label} ${dd[m.key]}${m.suffix}`).join("，");
+      lines.push(`${u.no} ${u.title}：${dd.done[b.unit] ? "✓ 完成" : "✗ 没完成"}｜保底 ${u.quota}${u.range ? `（范围：${u.range}）` : ""}｜${u.level}｜近7天 ${week}/7${data ? `｜今天 ${data}` : ""}`);
+      if (u.next && (u.next.stuck || u.next.first) && u.next.at === k) lines.push(`   卡在：${u.next.stuck || "—"}；下次第一步：${u.next.first || "—"}`);
     });
-    app.querySelectorAll("[data-done]").forEach(b => b.onclick = () => {
-      const m = (state.methods[b.dataset.done] ||= {}); m.done = !m.done; save(); renderMethods();
-    });
+    lines.push("", "我的想法：", j.text?.trim() || "（今天没写，直接看数据）", "",
+      "请帮我：1）用几句话看看今天的执行情况；2）指出一个可以改进的地方；3）如果某块定量需要调整，只建议一处，我周日再改。");
+    return lines.join("\n");
   }
-
-  // ---------- 进度 ----------
-  function streak() {
-    let n = 0; const d = new Date();
-    if (!doneCount(keyOf(d))) d.setDate(d.getDate() - 1);
-    while (doneCount(keyOf(d))) { n++; d.setDate(d.getDate() - 1); }
-    return n;
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); const ok = document.execCommand("copy"); t.remove(); return ok; }
   }
-  function chart(rows) {
-    const pts = rows.filter(r => r.listening != null || r.reading != null).slice(-14);
-    if (pts.length < 2) return `<div class="chart"><div class="empty">记满两天的正确率后，这里会出现趋势图。</div></div>`;
-    const W = 640, H = 220, L = 40, R = 16, T = 16, B = 32, iw = W - L - R, ih = H - T - B;
-    const x = i => L + (pts.length === 1 ? iw / 2 : i * iw / (pts.length - 1));
-    const y = v => T + ih - v / 100 * ih;
-    const line = (f, color) => {
-      const p = pts.map((r, i) => r[f] != null ? [x(i), y(r[f])] : null).filter(Boolean);
-      return `<polyline fill="none" stroke="${color}" stroke-width="2.5" points="${p.map(q => q.join(",")).join(" ")}"/>` +
-        p.map(q => `<circle cx="${q[0]}" cy="${q[1]}" r="3.5" fill="${color}"/>`).join("");
+  function renderReview() {
+    const d = new Date(), k = today(), j = jr(k);
+    const past = Object.keys(state.journal).filter(x => x !== k && (state.journal[x].text || state.journal[x].ai)).sort().reverse().slice(0, 30);
+    const now = Date.now(), H48 = 48 * 3600000;
+    const ideas = state.ideas.filter(i => !i.status).map(i => {
+      const left = i.at + H48 - now, ready = left <= 0;
+      return `<li class="idea ${ready ? "ready" : ""}"><div class="itext">${esc(i.text)}
+        <div class="small">${ready ? "满 48 小时了。还想做：先划掉一件，再加进来。" : `还要放 ${Math.ceil(left / 3600000)} 小时`}</div></div>
+        <button class="link" data-giveup="${i.at}">删掉</button></li>`;
+    }).join("");
+    app.innerHTML = `<h1>复盘</h1>
+      <p class="sub">${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${WEEK[d.getDay()]} · 想到哪说到哪，不想写也行。</p>
+      <label class="jbox">今天的想法（可不写）
+        <textarea id="jText" rows="5" placeholder="哪里顺、哪里卡、有什么感悟……">${esc(j.text)}</textarea></label>
+      <div class="row"><button class="btn primary" id="copyAI">📋 复制今晚复盘，发给 AI</button>
+        <span class="small">会带上今天的完成情况、卡点和定量数据。</span></div>
+      <label class="jbox">和 AI 聊完的结论（可不写）
+        <textarea id="jAI" rows="3" placeholder="把 AI 说的、你认同的一两句贴在这里">${esc(j.ai)}</textarea></label>
+      <h2>以前的复盘</h2>
+      ${past.length ? `<ul class="jlist">${past.map(x => { const e = state.journal[x], dt = new Date(x + "T00:00");
+        return `<li><div class="small">${x.slice(5).replace("-", "/")} 周${WEEK[dt.getDay()]} · 完成 ${doneCount(x)}/${UNITS.length}</div>
+          ${e.text ? `<p>${esc(e.text)}</p>` : ""}${e.ai ? `<p class="ai">AI：${esc(e.ai)}</p>` : ""}</li>`; }).join("")}</ul>`
+        : `<div class="empty small">写过的复盘会按日期列在这里，攒一段时间再回头找规律。</div>`}
+      <h2>想法冷却区</h2>
+      <p class="small">新想法先放这里，不马上做。48 小时后还想做，先划掉一件再加。</p>
+      <form class="ideaform" id="ideaForm"><input type="text" name="idea" placeholder="写下新想法…" aria-label="新想法"><button class="btn">放进去</button></form>
+      ${ideas ? `<ul class="ideas">${ideas}</ul>` : ""}`;
+    const t1 = document.getElementById("jText"), t2 = document.getElementById("jAI");
+    t1.oninput = () => { j.text = t1.value; save(); };
+    t2.oninput = () => { j.ai = t2.value; save(); };
+    document.getElementById("copyAI").onclick = async () => toast(await copy(aiText(k)) ? "已复制，粘贴给 AI 就行" : "复制失败，请手动选择");
+    document.getElementById("ideaForm").onsubmit = e => {
+      e.preventDefault(); const v = e.target.idea.value.trim(); if (!v) return;
+      state.ideas.push({ text: v, at: Date.now() }); save(); renderReview(); toast("已放进冷却区");
     };
-    const grid = [0, 50, 100].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--border)"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end" font-size="12" fill="var(--muted)">${v}</text>`).join("");
-    const tgt = C.goals.listeningTarget;
-    const labels = pts.map((r, i) => (i === 0 || i === pts.length - 1 || pts.length <= 7) ? `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" font-size="12" fill="var(--muted)">${r.k.slice(5)}</text>` : "").join("");
-    return `<div class="chart"><div class="legend"><span><i style="background:#5E9FE8"></i>听力</span><span><i style="background:#EAC26B"></i>阅读</span><span><i style="border-top:2px dashed var(--green);height:0"></i>目标 ${tgt}%</span></div>
-      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="听力和阅读正确率趋势">${grid}
-      <line x1="${L}" x2="${W - R}" y1="${y(tgt)}" y2="${y(tgt)}" stroke="var(--green)" stroke-dasharray="5 4"/>
-      ${line("listening", "#5E9FE8")}${line("reading", "#EAC26B")}${labels}</svg></div>`;
-  }
-  function renderProgress() {
-    const k = today(), t = day(k);
-    const rows = Object.keys(state.days).sort().map(kk => ({ k: kk, ...state.days[kk] }));
-    const anki = rows.reduce((s, r) => s + (Number(r.anki) || 0), 0);
-    const methodsDone = ALL_SECS.filter(s => state.methods[s.id]?.done).length;
-    const v = x => x == null || x === "" ? "" : x;
-    app.innerHTML = `<h1>进度</h1><p class="sub">每天记一行，要不要延期、离 6.5 还差多少，看数据就知道。</p>
-      <div class="stats">
-        <div class="stat"><div class="k">连续打卡</div><div class="v">${streak()} <small>天</small></div></div>
-        <div class="stat"><div class="k">今天完成</div><div class="v">${doneCount(k)}<small>/${UNITS.length}</small></div></div>
-        <div class="stat"><div class="k">真经词汇</div><div class="v">${anki}<small>/${C.goals.ankiTotal}</small></div><div class="bar"><i style="width:${Math.min(100, anki / C.goals.ankiTotal * 100)}%"></i></div></div>
-        <div class="stat"><div class="k">方法卡</div><div class="v">${methodsDone}<small>/${ALL_SECS.length}</small></div><div class="bar green"><i style="width:${methodsDone / ALL_SECS.length * 100}%"></i></div></div>
-      </div>
-      <h2>记录今天</h2>
-      <form class="log" id="logForm">
-        <label>听力正确率 %<input type="number" min="0" max="100" name="listening" value="${v(t.listening)}" placeholder="例如 82"></label>
-        <label>阅读正确率 %<input type="number" min="0" max="100" name="reading" value="${v(t.reading)}" placeholder="例如 75"></label>
-        <label>Anki 新词<input type="number" min="0" name="anki" value="${v(t.anki)}" placeholder="${C.goals.ankiDaily}"></label>
-        <label class="note">一句话备注<input type="text" name="note" value="${esc(t.note)}" placeholder="今天最大的卡点是…"></label>
-        <div class="act"><button class="btn primary" type="submit">保存</button><span class="small">完成单位在“我的一天”里打勾</span></div>
-      </form>
-      <h2>正确率趋势</h2>${chart(rows)}
-      <h2>每日记录</h2>
-      ${rows.length ? `<div class="tablebox"><table><thead><tr><th>日期</th><th>完成单位</th><th>听力</th><th>阅读</th><th>Anki</th><th>备注</th></tr></thead><tbody>
-        ${rows.slice().reverse().slice(0, 30).map(r => `<tr><td>${r.k}</td><td>${doneCount(r.k)}/${UNITS.length}</td><td>${r.listening != null ? r.listening + "%" : "—"}</td><td>${r.reading != null ? r.reading + "%" : "—"}</td><td>${r.anki ?? "—"}</td><td>${esc(r.note) || "—"}</td></tr>`).join("")}
-      </tbody></table></div>` : `<div class="tablebox"><div class="empty">还没有记录。</div></div>`}`;
-    document.getElementById("logForm").onsubmit = e => {
-      e.preventDefault();
-      const f = new FormData(e.target), num = n => f.get(n) === "" ? null : Number(f.get(n));
-      Object.assign(t, { listening: num("listening"), reading: num("reading"), anki: num("anki"), note: f.get("note").trim() });
-      save(); renderProgress(); toast("已保存");
-    };
+    app.querySelectorAll("[data-giveup]").forEach(b => b.onclick = () => { state.ideas.find(i => String(i.at) === b.dataset.giveup).status = "删掉"; save(); renderReview(); });
   }
 
   // ---------- 路由与备份 ----------
-  const views = { day: renderDay, methods: renderMethods, progress: renderProgress };
+  const views = { day: renderDay, quota: renderQuota, review: renderReview };
   function route() {
     const tab = views[location.hash.slice(1)] ? location.hash.slice(1) : "day";
     document.querySelectorAll(".tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === tab));
-    views[tab](); window.scrollTo(0, 0);
+    editingQ = null; views[tab](); window.scrollTo(0, 0);
   }
   window.addEventListener("hashchange", route);
-  setInterval(() => { if ((location.hash || "#day") === "#day") renderDay(); }, 30000);
+  setInterval(() => {
+    const busy = document.querySelector(".modal") || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+    if ((location.hash || "#day") === "#day" && !busy) renderDay();
+  }, 30000);
+  if (state.timer && timerLeft() === 0) setTimeout(tick, 300);
 
   document.getElementById("exportBtn").onclick = () => {
     const a = document.createElement("a");
@@ -192,7 +358,7 @@
     a.download = `时间账本-备份-${today()}.json`; a.click();
   };
   document.getElementById("importInput").onchange = async e => {
-    try { const s = JSON.parse(await e.target.files[0].text()); if (!s.days) throw 0; state = Object.assign({ days: {}, methods: {} }, s); save(); route(); toast("已导入"); }
+    try { const s = JSON.parse(await e.target.files[0].text()); if (!s.days) throw 0; state = Object.assign(DEFAULTS(), s); save(); route(); toast("已导入"); }
     catch { toast("文件格式不对"); }
   };
   route();
