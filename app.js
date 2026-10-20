@@ -32,17 +32,10 @@
   };
   // 听力二选一：数据决定今天做什么
   function listeningPlan(u) {
-    const k = today(), ks = Object.keys(state.days).filter(x => x <= k).sort();
-    const total = u.chapters || 3;
-    // 沿用最近填写的大章；每次换章重置达标次数，旧版未填章号时从默认第 1 章开始。
-    let cur = 1;
-    const rates = [];
-    for (const x of ks) {
-      const d = state.days[x];
-      const chapter = Number(d.lchap) || cur;
-      if (chapter !== cur) { cur = chapter; rates.length = 0; }
-      if (x < k && d.listening != null && d.listening !== "") rates.push(Number(d.listening));
-    }
+    const k = today(), ks = Object.keys(state.days).filter(x => x < k).sort();
+    const rates = ks.map(x => state.days[x].listening).filter(v => v != null && v !== "").map(Number);
+    const chaps = Object.values(state.days).map(d => Number(d.lchap)).filter(Boolean);
+    const cur = chaps.length ? Math.max(...chaps) : 1, total = u.chapters || 3;
     if (!rates.length) return `默写第 ${cur} 大章，记下正确率`;
     const last = rates[rates.length - 1], two = rates.slice(-2);
     if (two.length === 2 && two.every(v => v >= 90)) {
@@ -52,9 +45,14 @@
     return `继续默写第 ${cur} 大章（上次 ${last}%，${last >= 90 ? "再来 1 次 ≥ 90% 就开新章" : "还没到 90%"}）`;
   }
   const stepAt = (b, min) => (b.steps || []).find(s => min >= toMin(s.start) && min < toMin(s.end));
+  const nextFix = () => (state.fixes || []).find(f => f.status === "下次改");
   function stepsHtml(b, curStep) {
+    const fx = nextFix();
     return `<ol class="steps">${b.steps.map(s => `<li class="${s === curStep ? "cur" : ""}"><span class="st-time">${s.start}–${s.end}</span>
-      <div><b>${esc(s.title)}</b> <span class="small">${esc(s.what)}</span><div class="st-q">${esc(s.quota)}</div></div></li>`).join("")}</ol>`;
+      <div><b>${esc(s.title)}</b>${s.status ? ` <span class="badge ${s.status === "已确定" ? "lv-fix" : "lv-try"}">${s.status}</span>` : ""} <span class="small">${esc(s.what)}</span>
+      <div class="st-q">${esc(s.quota)}</div>
+      ${s.tasks ? `<ul class="tasks">${s.tasks.map(t => `<li>${esc(t)}${/^B /.test(t) ? `<div class="fix ${fx ? "" : "none"}">${fx ? `今天改：${esc(fx.text)}` : `清单里还没有“下次改”的，<a href="#review">去复盘页挑一条 →</a>`}</div>` : ""}</li>`).join("")}</ul>` : ""}
+      ${s.systems ? sysLinks(s.systems) : ""}</div></li>`).join("")}</ol>`;
   }
   const doneDays = uid => Object.values(state.days).filter(d => d.done?.[uid]).length;
   const keptDays = uid => (unitOf(uid).baseDays || 0) + doneDays(uid);
@@ -339,12 +337,27 @@
       if (u.next && (u.next.stuck || u.next.first) && u.next.at === k) lines.push(`   卡在：${u.next.stuck || "—"}；下次第一步：${u.next.first || "—"}`);
     });
     lines.push("", "我的想法：", j.text?.trim() || "（今天没写，直接看数据）", "",
-      "请帮我：1）用几句话看看今天的执行情况；2）指出一个可以改进的地方；3）如果某块定量需要调整，只建议一处，我周日再改。");
+      "");
+    const fixes = (state.fixes || []).filter(f => f.status !== "已上线");
+    lines.push(`网站待改清单（时间账本 v${C.version}）：`, ...(fixes.length ? fixes.map((f, i) => `${i + 1}. [${f.status}] ${f.text}`) : ["（空）"]), "",
+      "请帮我：1）用几句话看看今天的执行情况；2）指出一个可以改进的地方；3）如果某块定量需要调整，只建议一处，我周日再改；",
+      "4）把标了 [下次改] 的那一条（没有就从 [待改] 里挑最值得改的一条）写成给 Agent 的派活单四行：任务 / 输入 / 输出 / 验收。护栏：只改一处；不改 localStorage 键名、不删字段；在 data.js 的 changelog 加一行、version 加 0.1。");
     return lines.join("\n");
   }
   async function copy(text) {
     try { await navigator.clipboard.writeText(text); return true; }
     catch { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select(); const ok = document.execCommand("copy"); t.remove(); return ok; }
+  }
+  function fixList() {
+    const fs = state.fixes || [], open = fs.filter(f => f.status !== "已上线"), done = fs.filter(f => f.status === "已上线").slice(-5).reverse();
+    const order = { "下次改": 0, "待改": 1 };
+    const rows = open.slice().sort((a, b) => order[a.status] - order[b.status] || a.at - b.at).map(f => `<li class="idea fixrow ${f.status === "下次改" ? "ready" : ""}">
+      <div class="itext">${esc(f.text)}<div class="small">${f.status === "下次改" ? "明早 7:30 派给 Agent" : "待改"}</div></div>
+      ${f.status === "下次改" ? `<button class="btn" data-fixst="${f.at}" data-v="已上线">✓ 验收通过</button><button class="link" data-fixst="${f.at}" data-v="待改">放回去</button>`
+        : `<button class="btn" data-fixst="${f.at}" data-v="下次改">下次改</button>`}
+      <button class="link" data-fixst="${f.at}" data-v="删掉">删掉</button></li>`).join("");
+    return (rows ? `<ul class="ideas">${rows}</ul>` : "") +
+      (done.length ? `<p class="small">最近上线：${done.map(f => `${esc(f.text)}（${f.doneAt.slice(5)}）`).join("；")}</p>` : "");
   }
   function renderReview() {
     const d = new Date(), k = today(), j = jr(k);
@@ -369,6 +382,10 @@
         return `<li><div class="small">${x.slice(5).replace("-", "/")} 周${WEEK[dt.getDay()]} · 完成 ${doneCount(x)}/${UNITS.length}</div>
           ${e.text ? `<p>${esc(e.text)}</p>` : ""}${e.ai ? `<p class="ai">AI：${esc(e.ai)}</p>` : ""}</li>`; }).join("")}</ul>`
         : `<div class="empty small">写过的复盘会按日期列在这里，攒一段时间再回头找规律。</div>`}
+      <h2>网站待改清单</h2>
+      <p class="small">用的时候觉得不顺手就记一条。每天只挑一条标“下次改”，第二天 7:30 派给 Agent；晚上 ⑦ 验收，没问题就标“已上线”。</p>
+      <form class="ideaform" id="fixForm"><input type="text" name="fix" placeholder="例如：定量页的数据输入框太小" aria-label="网站待改"><button class="btn">记一条</button></form>
+      ${fixList()}
       <h2>想法冷却区</h2>
       <p class="small">新想法先放这里，不马上做。48 小时后还想做，先划掉一件再加。</p>
       <form class="ideaform" id="ideaForm"><input type="text" name="idea" placeholder="写下新想法…" aria-label="新想法"><button class="btn">放进去</button></form>
@@ -377,6 +394,17 @@
     t1.oninput = () => { j.text = t1.value; save(); };
     t2.oninput = () => { j.ai = t2.value; save(); };
     document.getElementById("copyAI").onclick = async () => toast(await copy(aiText(k)) ? "已复制，粘贴给 AI 就行" : "复制失败，请手动选择");
+    document.getElementById("fixForm").onsubmit = e => {
+      e.preventDefault(); const v = e.target.fix.value.trim(); if (!v) return;
+      (state.fixes ||= []).push({ text: v, at: Date.now(), status: "待改" }); save(); renderReview(); toast("已记进待改清单");
+    };
+    app.querySelectorAll("[data-fixst]").forEach(b => b.onclick = () => {
+      const f = state.fixes.find(x => String(x.at) === b.dataset.fixst), v = b.dataset.v;
+      if (v === "下次改") state.fixes.forEach(x => { if (x.status === "下次改") x.status = "待改"; });
+      if (v === "删掉") state.fixes = state.fixes.filter(x => x !== f);
+      else { f.status = v; if (v === "已上线") f.doneAt = today(); }
+      save(); renderReview();
+    });
     document.getElementById("ideaForm").onsubmit = e => {
       e.preventDefault(); const v = e.target.idea.value.trim(); if (!v) return;
       state.ideas.push({ text: v, at: Date.now() }); save(); renderReview(); toast("已放进冷却区");
@@ -407,5 +435,11 @@
     try { const s = JSON.parse(await e.target.files[0].text()); if (!s.days) throw 0; state = Object.assign(DEFAULTS(), s); save(); route(); toast("已导入"); }
     catch { toast("文件格式不对"); }
   };
+  const foot = document.querySelector(".foot");
+  if (foot && C.version) {
+    const d = document.createElement("details"); d.className = "ver";
+    d.innerHTML = `<summary>${C.principles.join(" · ")} ｜ v${C.version}</summary><ul>${C.changelog.map(c => `<li><b>v${c.v}</b> ${esc(c.text)}</li>`).join("")}</ul>`;
+    foot.appendChild(d);
+  }
   route();
 })();
