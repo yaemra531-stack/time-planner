@@ -206,3 +206,17 @@ details.qlog ul{margin:4px 0 0;padding-left:18px;display:grid;gap:6px}
 .jlist p{margin:4px 0 0;white-space:pre-wrap}
 .jlist p.ai{color:var(--muted);font-size:15px}
 @media (max-width:720px){.qgrid{grid-template-columns:1fr}.tabs a{padding:10px 12px}}
+/* v1.3 */
+.steps{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px;font-size:14px}
+.steps li{display:flex;gap:12px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)}
+.steps li.cur{border-color:var(--blue);background:var(--blue-s)}
+.st-time{flex:none;width:88px;color:var(--muted);font-variant-numeric:tabular-nums}
+.st-q{color:var(--muted)}
+.plan{color:var(--blue);font-weight:600}
+table.mt td{white-space:normal;vertical-align:top}
+table.mt td:first-child{white-space:nowrap;color:var(--muted)}
+.later{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+.later li{border:1px dashed var(--border);border-radius:8px;padding:12px 16px;font-size:15px}
+@media (max-width:720px){.steps li{flex-direction:column;gap:2px}.st-time{width:auto}
+  table.mt thead{display:none}table.mt tr{display:grid;gap:2px;padding:10px 16px;border-bottom:1px solid var(--border)}table.mt td{border:0;padding:0}}
+table.mt td:nth-child(2){white-space:nowrap}

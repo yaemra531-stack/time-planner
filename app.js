@@ -26,8 +26,36 @@
   // 单位信息：data.js 的默认值 + 网页上的修改
   const unitOf = uid => {
     const b = UNITS.find(u => u.unit === uid);
-    return Object.assign({}, b, state.units[uid] || {});
+    const u = Object.assign({}, b, state.units[uid] || {});
+    if (u.rule === "listening") u.plan = listeningPlan(u);
+    return u;
   };
+  // 听力二选一：数据决定今天做什么
+  function listeningPlan(u) {
+    const k = today(), ks = Object.keys(state.days).filter(x => x <= k).sort();
+    const total = u.chapters || 3;
+    // 沿用最近填写的大章；每次换章重置达标次数，旧版未填章号时从默认第 1 章开始。
+    let cur = 1;
+    const rates = [];
+    for (const x of ks) {
+      const d = state.days[x];
+      const chapter = Number(d.lchap) || cur;
+      if (chapter !== cur) { cur = chapter; rates.length = 0; }
+      if (x < k && d.listening != null && d.listening !== "") rates.push(Number(d.listening));
+    }
+    if (!rates.length) return `默写第 ${cur} 大章，记下正确率`;
+    const last = rates[rates.length - 1], two = rates.slice(-2);
+    if (two.length === 2 && two.every(v => v >= 90)) {
+      return cur < total ? `开第 ${cur + 1} 大章（连续 2 次 ≥ 90%）。开了就把“正在练第几大章”改成 ${cur + 1}`
+        : `${total} 大章都过了：挑正确率最低的一章默写`;
+    }
+    return `继续默写第 ${cur} 大章（上次 ${last}%，${last >= 90 ? "再来 1 次 ≥ 90% 就开新章" : "还没到 90%"}）`;
+  }
+  const stepAt = (b, min) => (b.steps || []).find(s => min >= toMin(s.start) && min < toMin(s.end));
+  function stepsHtml(b, curStep) {
+    return `<ol class="steps">${b.steps.map(s => `<li class="${s === curStep ? "cur" : ""}"><span class="st-time">${s.start}–${s.end}</span>
+      <div><b>${esc(s.title)}</b> <span class="small">${esc(s.what)}</span><div class="st-q">${esc(s.quota)}</div></div></li>`).join("")}</ol>`;
+  }
   const doneDays = uid => Object.values(state.days).filter(d => d.done?.[uid]).length;
   const keptDays = uid => (unitOf(uid).baseDays || 0) + doneDays(uid);
   const unitMinutes = uid => unitOf(uid).minutes || 45;
@@ -150,7 +178,7 @@
         <div class="t-title">${u.no} ${esc(u.title)}
           <span class="badge ${levelCls(u.level)}">${esc(u.level)}</span>
           <span class="kept">${keptDays(uid) ? `已坚持 ${keptDays(uid)} 天` : "刚开始"}</span></div>
-        <dl class="facts"><dt>保底</dt><dd>${esc(u.quota)}</dd>${next ? "" : `<dt>第一步</dt><dd>${esc(u.first)}</dd>`}</dl>
+        <dl class="facts">${u.plan ? `<dt>今天</dt><dd class="plan">${esc(u.plan)}</dd>` : ""}<dt>保底</dt><dd>${esc(u.quota)}</dd>${next ? "" : `<dt>第一步</dt><dd>${esc(u.first)}</dd>`}</dl>
         ${next}
         ${sysLinks(b.systems)}
         <div class="row">
@@ -171,6 +199,13 @@
         <div class="what">${u.no} ${esc(u.title)}</div>
         <div class="small">保底：${esc(u.quota)}。做完了可以继续做同一件事，直到闹钟响。</div></div>
         <div class="left">还剩<b data-countdown>${fmt(s)}</b><button class="link" data-stop>提前停止</button></div></section>`;
+    } else if (cur && cur.steps) {
+      const st = stepAt(cur, min) || cur.steps[0], left = remaining(st, min);
+      nowCard = `<section class="now" aria-live="polite">
+        <div><div class="label">现在 · ${st.start}–${st.end} · ${esc(cur.title)}</div>
+        <div class="what">${esc(st.title)}</div>
+        <div class="small">${esc(st.quota)}</div></div>
+        <div class="left">这一步还剩<b>${left} 分钟</b></div></section>`;
     } else if (cur) {
       const u = cur.unit ? unitOf(cur.unit) : cur;
       const left = remaining(cur, min), total = (toMin(cur.end) - toMin(cur.start) + 1440) % 1440 || 1440;
@@ -179,7 +214,7 @@
         ${cur.unit ? ring(1 - left / total) : ""}
         <div><div class="label">现在 · ${cur.start}–${cur.end}</div>
         <div class="what">${cur.no ? cur.no + " " : ""}${esc(cur.title)}</div>
-        ${cur.unit ? `<div class="small">第一步：${esc(nf)}</div>` : cur.note ? `<div class="small">${esc(cur.note)}</div>` : ""}
+        ${cur.unit ? `${u.plan ? `<div class="small"><b>今天：</b>${esc(u.plan)}</div>` : ""}<div class="small">第一步：${esc(nf)}</div>` : cur.note ? `<div class="small">${esc(cur.note)}</div>` : ""}
         ${cur.unit && !day(k).done[cur.unit] ? `<button class="btn primary go" data-start="${cur.unit}">▶ 开始 ${unitMinutes(cur.unit)} 分钟</button>` : ""}</div>
         <div class="left">这一段还剩<b>${left} 分钟</b></div></section>`;
     }
@@ -188,7 +223,7 @@
       const cls = ["tl", b.unit && "unit", b.rest && "rest", on && "done", b === cur && "cur"].filter(Boolean).join(" ");
       const body = b.unit ? unitCard(b, k)
         : `<div class="t-title">${esc(b.title)}${b.rest ? ` <span class="badge lv-rest">休息</span>` : ""}</div>
-           ${b.note ? `<div class="quota">${esc(b.note)}</div>` : ""}${sysLinks(b.systems)}`;
+           ${b.note ? `<div class="quota">${esc(b.note)}</div>` : ""}${b.steps ? stepsHtml(b, b === cur ? stepAt(b, min) : null) : ""}${sysLinks(b.systems)}`;
       return `<li class="${cls}"><div class="time">${b.start}–${b.end}</div><div class="body">${body}</div></li>`;
     }).join("");
     app.innerHTML = `<h1>我的一天</h1>
@@ -222,6 +257,13 @@
     return { text: "", pct: null };
   }
   let editingQ = null;
+  function morning() {
+    const b = C.schedule.find(x => x.steps);
+    if (!b) return "";
+    return `<div class="tablebox"><table class="mt"><thead><tr><th>时间</th><th>类别</th><th>放什么</th><th>定量</th></tr></thead><tbody>
+      ${b.steps.map(s => `<tr><td>${s.start}–${s.end}</td><td><b>${esc(s.title)}</b></td><td>${esc(s.what)}</td><td>${esc(s.quota)}</td></tr>`).join("")}
+      </tbody></table></div><p class="small">顺序固定 ①→②→③。感悟白天随时记，早上统一搬。</p>`;
+  }
   function renderQuota() {
     const k = today(), dd = day(k), sun = isSunday();
     const cards = UNITS.map(b => {
@@ -243,7 +285,7 @@
           <span class="badge ${levelCls(u.level)}">${esc(u.level)}</span>
           <span class="badge ${u.range ? "lv-try" : "lv-fix"}">${u.range ? "试行中" : "已确定"}</span></div>
           <div class="small">${b.start}–${b.end} · ${keptDays(uid) ? `已坚持 ${keptDays(uid)} 天` : "刚开始"} · 近 7 天完成 ${week}/7</div></div>
-        <dl class="facts big"><dt>保底</dt><dd><b>${esc(u.quota)}</b></dd>
+        <dl class="facts big">${u.plan ? `<dt>今天</dt><dd class="plan">${esc(u.plan)}</dd>` : ""}<dt>保底</dt><dd><b>${esc(u.quota)}</b></dd>
           ${u.range ? `<dt>范围</dt><dd>${esc(u.range)}</dd>` : ""}</dl>
         ${editingQ === uid ? edit : `<button class="link" data-qedit-open="${uid}">改保底量 / 范围 / 熟练度</button>`}
         <label class="first">第一步（随时改，下次照着做）<input type="text" data-first="${uid}" value="${esc(u.first)}"></label>
@@ -255,7 +297,11 @@
       <p class="sub">每块干多少。能定的写死，定不了的先给个范围，用着再收紧。今天的数据也在这里记。</p>
       <div class="banner ${sun ? "sun" : ""}">${sun ? "<b>今天周日：可以改规则。</b>每块最多改一处，改完写一句原因。"
         : "<b>第一步随时改；保底量、范围、熟练度最好留到周日改。</b>真要改也行，写一句原因。"}</div>
-      <div class="qgrid">${cards}</div>`;
+      <h2>早间 7:30–8:30 · 提醒事项三类</h2>${morning()}
+      <h2>45 分钟单位</h2>
+      <div class="qgrid">${cards}</div>
+      <h2>以后再定量 <span class="small">（先放着，别忘了）</span></h2>
+      <ul class="later">${(C.later || []).map(l => `<li><b>${esc(l.title)}</b><div>${esc(l.what)}</div><div class="small">什么时候：${esc(l.when)}</div></li>`).join("")}</ul>`;
     bindQuota(k);
   }
   function bindQuota(k) {
@@ -289,7 +335,7 @@
     UNITS.forEach(b => {
       const u = unitOf(b.unit), week = lastDays(7).filter(x => state.days[x]?.done?.[b.unit]).length;
       const data = (u.metrics || []).filter(m => dd[m.key] != null).map(m => `${m.label} ${dd[m.key]}${m.suffix}`).join("，");
-      lines.push(`${u.no} ${u.title}：${dd.done[b.unit] ? "✓ 完成" : "✗ 没完成"}｜保底 ${u.quota}${u.range ? `（范围：${u.range}）` : ""}｜${u.level}｜近7天 ${week}/7${data ? `｜今天 ${data}` : ""}`);
+      lines.push(`${u.no} ${u.title}：${dd.done[b.unit] ? "✓ 完成" : "✗ 没完成"}｜${u.plan ? `今天 ${u.plan}｜` : ""}保底 ${u.quota}${u.range ? `（范围：${u.range}）` : ""}｜${u.level}｜近7天 ${week}/7${data ? `｜今天 ${data}` : ""}`);
       if (u.next && (u.next.stuck || u.next.first) && u.next.at === k) lines.push(`   卡在：${u.next.stuck || "—"}；下次第一步：${u.next.first || "—"}`);
     });
     lines.push("", "我的想法：", j.text?.trim() || "（今天没写，直接看数据）", "",
