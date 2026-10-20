@@ -4,11 +4,11 @@ window.CONFIG = {
   systems: {
     radar:     { name: "雅思见闻", url: "https://yaemra531-stack.github.io/ielts-radar/" },
     s100:      { name: "顾家北100句", url: "https://yaemra531-stack.github.io/ielts-100-sentences/" },
-    reading:   { name: "阅读真经5（本地）", url: "" },
+    reading:   { name: "真经5", url: "" },
     listening: { name: "听写回合", url: "https://ielts-listening-rounds.amber-lemon-4035.chatgpt.site/" },
     blog:      { name: "博客随笔", url: "https://yaemra531-stack.github.io/ink-thought-blog/" },
     diary:     { name: "雅思日记", url: "https://ielts-diary.yaemra531.workers.dev/" },
-    overview:  { name: "总览（Notion）", url: "https://app.notion.com/p/e16526980d194d13b2e764e9bcd6837b" }
+    overview:  { name: "总览", url: "https://app.notion.com/p/e16526980d194d13b2e764e9bcd6837b" }
   },
 
   // 每日固定作息。带 unit 的是 45 分钟单位：可计时、可打勾、可复盘。
@@ -17,33 +17,32 @@ window.CONFIG = {
   // baseDays = 网站上线前已经坚持的天数
   schedule: [
     { start: "07:00", end: "07:30", title: "起床、洗漱、早餐" },
-    { start: "07:30", end: "08:30", title: "派活 · 提醒事项三类", systems: ["radar"],
-      note: "打开提醒事项，按 ①→②→③ 的顺序过",
+    { start: "07:30", end: "08:30", title: "早上派活", systems: ["radar"],
       steps: [
-        { start: "07:30", end: "07:50", title: "① Agent 活", what: "交给 Agent 做、你打球时它在跑", status: "试行中",
-          quota: "每天 2 条，每条写派活单四行：任务 / 输入 / 输出 / 验收",
+        { start: "07:30", end: "07:50", title: "① Agent 活", what: "打球时它在跑", status: "试行中",
+          quota: "A + B 两条，C 可选", hideQuota: true,
           tasks: [
-            "A 抓素材：小红书 + 抖音，发任务卡 V2.2（改日期）",
-            "B 迭代网站：时间账本改一处（来自复盘页“网站待改清单”）",
-            "C 第三件：待定"
+            "A 抓素材：发任务卡（改日期）",
+            "B 改网站：从待改清单挑一处",
+            "C 尝试：新工具、新功能，或自由时间"
           ] },
-        { start: "07:50", end: "08:10", title: "② 要办的事", what: "琐事：买东西、解决某个问题", status: "已确定",
-          quota: "每天最多 3 件，这个时段集中办完" },
-        { start: "08:10", end: "08:30", title: "③ 内容感悟", what: "随笔：来源 + 一句话 + 为什么触动我，按固定格式输出", status: "已确定",
-          quota: "把前一天记下的全部同步到随笔网站", systems: ["blog"] }
+        { start: "07:50", end: "08:10", title: "② 要办的事", what: "琐事", status: "已确定",
+          quota: "最多 3 件，集中办完" },
+        { start: "08:10", end: "08:30", title: "③ 内容感悟", what: "随笔：来源 + 一句话总结或升华，按固定格式输出", status: "已确定",
+          quota: "同步到随笔网站", systems: ["blog"] }
       ] },
-    { start: "08:30", end: "10:30", title: "球场", rest: true, note: "以后把投篮拆成可控动作，每项定量" },
+    { start: "08:30", end: "10:30", title: "球场", rest: true },
     { start: "10:30", end: "11:20", title: "洗漱、午饭" },
     { start: "11:20", end: "12:05", unit: "u1", no: "①", title: "单词",
-      quota: "Anki 60 个", first: "打开 Anki，点开真经词库，开始复习", level: "熟练", baseDays: 30,
+      quota: "Anki 60 个", first: "打开 Anki 真经词库", level: "熟练", baseDays: 30,
       metrics: [{ key: "anki", label: "今天 Anki", suffix: "个", sum: true, total: 3600, totalLabel: "真经词汇" }] },
     { start: "12:15", end: "13:00", unit: "u2", no: "②", title: "内容", systems: ["radar", "diary"],
-      quota: "挑 1～2 条候选，写 1 张选题卡", first: "把今天的雅思见闻 JSON 导入网站，从第 1 条读起", level: "摸索中",
+      quota: "挑 1～2 条候选，写 1 张选题卡", first: "导入今天的见闻 JSON", level: "摸索中",
       range: "再手动跑 2 周，直到每一步不用想 → 固化成 Skill → 提量",
       metrics: [{ key: "cards", label: "选题卡", suffix: "张", sum: true }] },
     { start: "13:30", end: "15:00", title: "午睡", rest: true },
     { start: "15:00", end: "15:45", unit: "u3", no: "③", title: "听力", systems: ["listening"],
-      quota: "默写 2 节，记下正确率", first: "打开王陆，按“今天”那一行选章节，开始默写", level: "摸索中",
+      quota: "默写 2 节，记下正确率", first: "打开王陆，按“今天”选章节", level: "摸索中",
       rule: "listening",   // 没到 90% → 继续默写当前大章；连续 2 次 ≥ 90% → 开下一大章
       chapters: 3,
       metrics: [
@@ -51,29 +50,29 @@ window.CONFIG = {
         { key: "lchap", label: "正在练第几大章", suffix: "", latest: true, base: 1, total: 3, totalLabel: "王陆大章" }
       ] },
     { start: "15:55", end: "16:40", unit: "u4", no: "④", title: "阅读", systems: ["reading"],
-      quota: "1 篇限时 20 分钟 + 25 分钟逐题讲清“定位句 + 同义替换”", first: "打开真经 5 下一篇，计时 20 分钟开做", level: "新手",
+      quota: "1 篇限时 20 分 + 逐题讲清", first: "打开下一篇，计时开做", level: "新手",
       range: "1～2 篇，熟练后升到 2 篇",
       metrics: [{ key: "reading", label: "阅读正确率", suffix: "%", trend: true }] },
     { start: "17:00", end: "19:00", title: "晚饭、休息", rest: true },
     { start: "19:00", end: "19:45", unit: "u5", no: "⑤", title: "写作 · 顾家北", systems: ["s100", "overview"],
-      quota: "至少 5 个学习要点", first: "复制写作提示词，填上“从学习要点 21 开始”，发给 AI", level: "摸索中",
+      quota: "至少 5 个学习要点", first: "复制提示词，填起点，发 AI", level: "摸索中",
       range: "过渡期照旧按书学；真题练习页做好后改成真题驱动",
       metrics: [{ key: "gjb", label: "学到第几个要点", suffix: "", latest: true, base: 20, total: 110, totalLabel: "顾家北学习要点" }] },
     { start: "19:55", end: "20:40", unit: "u6", no: "⑥", title: "口语 · 慎小嶷", systems: ["overview"],
-      quota: "至少 1 个 Day", first: "复制口语提示词，填上今天的 Day，发给 AI", level: "新手",
+      quota: "至少 1 个 Day", first: "复制提示词，填 Day，发 AI", level: "新手",
       range: "过渡期照旧按书学；真题练习页做好后改成真题驱动",
       metrics: [{ key: "sxy", label: "学到 Day", suffix: "", latest: true, base: 0, total: 10, totalLabel: "慎小嶷 Day" }] },
     { start: "20:40", end: "21:10", title: "彻底休息", note: "散步、洗澡，不碰手机", rest: true },
     { start: "21:10", end: "21:40", unit: "u7", no: "⑦", title: "收尾整理", systems: ["blog", "diary"], minutes: 30,
-      quota: "复盘发给 AI 聊 10 分钟 + 收尾卡 5 项 + 列好明早派活单", first: "打开“复盘”页，点 📋 复制今晚复盘", level: "摸索中" },
+      quota: "复盘聊 AI + 收尾卡 + 明早派活单", first: "打开“复盘”页，点 📋 复制今晚复盘", level: "摸索中" },
     { start: "21:40", end: "22:30", title: "不看屏幕", note: "洗漱、听音频、纸质书" },
     { start: "22:30", end: "07:00", title: "睡觉", rest: true }
   ],
 
-  version: "1.5",
+  version: "1.6",
   principles: ["流程看得见", "每步有定量", "做完有复盘"],
   changelog: [
-    { v: "1.5", text: "瘦身改版：我的一天只展开“现在”这一行，其他一行一句、点开看细节；去掉层层框线和标签；顶部 7 个进度点；红线收成一行；整站样式重写" },
+    { v: "1.6", text: "回到 v1.2 的层次排版：一天分上午 / 下午 / 晚上三段，做完的卡收成一条，现在的卡完整展开；全页文字精简（v1.5 极简版撤回）" },
     { v: "1.4", text: "网站迭代闭环：复盘页加“网站待改清单”，复制复盘时让 AI 写明天的派活单；7:30 ① 显示今天要派的两条活；页脚显示建站三原则和版本" },
     { v: "1.3", text: "早间三类、听力二选一规则、阅读方案 A、⑦ 收尾三件事、“以后再定量”清单" },
     { v: "1.2", text: "三页结构：我的一天 / 定量 / 复盘；复盘可一键复制给 AI" },
