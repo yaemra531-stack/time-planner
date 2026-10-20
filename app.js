@@ -46,14 +46,6 @@
   }
   const stepAt = (b, min) => (b.steps || []).find(s => min >= toMin(s.start) && min < toMin(s.end));
   const nextFix = () => (state.fixes || []).find(f => f.status === "下次改");
-  function stepsHtml(b, curStep) {
-    const fx = nextFix();
-    return `<ol class="steps">${b.steps.map(s => `<li class="${s === curStep ? "cur" : ""}"><span class="st-time">${s.start}–${s.end}</span>
-      <div><b>${esc(s.title)}</b>${s.status ? ` <span class="badge ${s.status === "已确定" ? "lv-fix" : "lv-try"}">${s.status}</span>` : ""} <span class="small">${esc(s.what)}</span>
-      <div class="st-q">${esc(s.quota)}</div>
-      ${s.tasks ? `<ul class="tasks">${s.tasks.map(t => `<li>${esc(t)}${/^B /.test(t) ? `<div class="fix ${fx ? "" : "none"}">${fx ? `今天改：${esc(fx.text)}` : `清单里还没有“下次改”的，<a href="#review">去复盘页挑一条 →</a>`}</div>` : ""}</li>`).join("")}</ul>` : ""}
-      ${s.systems ? sysLinks(s.systems) : ""}</div></li>`).join("")}</ol>`;
-  }
   const doneDays = uid => Object.values(state.days).filter(d => d.done?.[uid]).length;
   const keptDays = uid => (unitOf(uid).baseDays || 0) + doneDays(uid);
   const unitMinutes = uid => unitOf(uid).minutes || 45;
@@ -85,21 +77,7 @@
   }
   const doneCount = k => UNITS.filter(u => state.days[k]?.done?.[u.unit]).length;
 
-  function ring(pct) {
-    const r = 22, c = 2 * Math.PI * r;
-    return `<svg class="ring" width="56" height="56" viewBox="0 0 56 56" aria-hidden="true">
-      <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--border)" stroke-width="5"/>
-      <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--blue)" stroke-width="5" stroke-linecap="round"
-        stroke-dasharray="${c * Math.max(0, Math.min(1, pct))} ${c}" transform="rotate(-90 28 28)"/></svg>`;
-  }
 
-  function sysLinks(ids = []) {
-    if (!ids.length) return "";
-    return `<div class="sys">${ids.map(id => {
-      const s = C.systems[id];
-      return s.url ? `<a href="${s.url}" target="_blank" rel="noopener">${esc(s.name)} ↗</a>` : `<span>${esc(s.name)}</span>`;
-    }).join("")}</div>`;
-  }
   const levelCls = l => ({ "熟练": "lv-ok", "摸索中": "lv-mid", "新手": "lv-new" }[l] || "lv-mid");
 
   // ---------- 计时器 ----------
@@ -120,11 +98,8 @@
     if (!state.timer) return;
     const s = timerLeft();
     document.querySelectorAll("[data-countdown]").forEach(el => el.textContent = fmt(s));
-    const rg = document.querySelector(".now .ring circle:last-child");
-    if (rg) {
-      const c = 2 * Math.PI * 22, pct = 1 - s / (state.timer.total || 2700);
-      rg.setAttribute("stroke-dasharray", `${c * pct} ${c}`);
-    }
+    const bar = document.querySelector("[data-bar]");
+    if (bar) bar.style.width = `${(1 - s / (state.timer.total || 2700)) * 100}%`;
     document.title = `${fmt(s)} · ${unitOf(state.timer.unit).title}`;
     if (s === 0 && !timerEndShown) {
       timerEndShown = true; beep();
@@ -166,73 +141,92 @@
   }
 
   // ---------- 我的一天 ----------
-  function unitCard(b, k) {
-    const uid = b.unit, u = unitOf(uid), on = day(k).done[uid];
-    const running = state.timer?.unit === uid;
-    const next = u.next && (u.next.stuck || u.next.first) ? `<div class="next"><b>下次从这里开始</b>
-      ${u.next.stuck ? `<div>卡在：${esc(u.next.stuck)}</div>` : ""}${u.next.first ? `<div>第一步：${esc(u.next.first)}</div>` : ""}
-      <button class="link" data-clearnext="${uid}">已接上，清掉</button></div>` : "";
-    return `<div class="unitrow"><div class="ucol">
-        <div class="t-title">${u.no} ${esc(u.title)}
-          <span class="badge ${levelCls(u.level)}">${esc(u.level)}</span>
-          <span class="kept">${keptDays(uid) ? `已坚持 ${keptDays(uid)} 天` : "刚开始"}</span></div>
-        <dl class="facts">${u.plan ? `<dt>今天</dt><dd class="plan">${esc(u.plan)}</dd>` : ""}<dt>保底</dt><dd>${esc(u.quota)}</dd>${next ? "" : `<dt>第一步</dt><dd>${esc(u.first)}</dd>`}</dl>
-        ${next}
-        ${sysLinks(b.systems)}
-        <div class="row">
-          ${running ? `<button class="btn run" data-stop>■ 停止 <span data-countdown>${fmt(timerLeft())}</span></button>`
-                    : `<button class="btn" data-start="${uid}" ${state.timer ? "disabled" : ""}>▶ 开始 ${unitMinutes(uid)} 分钟</button>`}
-        </div></div>
-      <button class="check ${on ? "on" : ""}" data-unit="${uid}" aria-pressed="${!!on}" aria-label="完成 ${esc(u.title)}">✓</button></div>`;
+  // 默认只展开“现在”这一行，其他行一行一句，点开再看细节
+  let openIdx = null;
+  const blockIdx = b => C.schedule.indexOf(b);
+  function unitDetail(b, k, inHero) {
+    const uid = b.unit, u = unitOf(uid), running = state.timer?.unit === uid;
+    const hasNext = u.next && (u.next.stuck || u.next.first);
+    const links = (b.systems || []).map(id => C.systems[id]).filter(s => s.url).map(s => `<a href="${s.url}" target="_blank" rel="noopener">${esc(s.name)} ↗</a>`).join("");
+    return `<div class="ag-detail">
+      ${u.plan && !inHero ? `<p class="d-plan">今天 · ${esc(u.plan)}</p>` : ""}
+      ${hasNext ? `<div class="d-next"><span class="d-k">接着上次</span>
+          ${u.next.stuck ? `<div>卡在：${esc(u.next.stuck)}</div>` : ""}${u.next.first ? `<div>第一步：${esc(u.next.first)}</div>` : ""}
+          <button class="link" data-clearnext="${uid}">已接上，清掉</button></div>`
+        : `<p><span class="d-k">第一步</span>${esc(u.first)}</p>`}
+      <div class="d-foot">
+        ${inHero ? "" : running ? `<button class="btn sm run" data-stop>■ 停止 <span data-countdown>${fmt(timerLeft())}</span></button>`
+                  : `<button class="btn sm" data-start="${uid}" ${state.timer ? "disabled" : ""}>▶ 开始 ${unitMinutes(uid)} 分钟</button>`}
+        <span class="d-meta">${esc(u.level)} · ${keptDays(uid) ? `已坚持 ${keptDays(uid)} 天` : "刚开始"}</span>
+        ${links ? `<span class="d-links">${links}</span>` : ""}
+      </div></div>`;
   }
-
+  function stepsDetail(b, curStep) {
+    const fx = nextFix();
+    return `<div class="ag-detail"><ol class="steps">${b.steps.map(s => `<li class="${s === curStep ? "cur" : ""}">
+      <span class="st-time">${s.start}</span>
+      <div class="st-body"><div class="st-title">${esc(s.title)}<span class="st-what">${esc(s.what)}</span></div>
+        <div class="st-q">${esc(s.quota)}</div>
+        ${s.tasks ? `<ul class="tasks">${s.tasks.map(t => `<li>${esc(t)}${/^B /.test(t) ? (fx ? `<div class="fix">今天改：${esc(fx.text)}</div>` : `<div class="fix none">还没定“下次改”，今天跳过 · <a href="#review">去挑一条</a></div>`) : ""}</li>`).join("")}</ul>` : ""}
+        ${s.systems ? `<div class="d-links">${s.systems.map(id => C.systems[id]).filter(x => x.url).map(x => `<a href="${x.url}" target="_blank" rel="noopener">${esc(x.name)} ↗</a>`).join("")}</div>` : ""}
+      </div></li>`).join("")}</ol></div>`;
+  }
+  function heroCard(cur, min, k) {
+    if (state.timer) {
+      const u = unitOf(state.timer.unit), s = timerLeft(), pct = 1 - s / (state.timer.total || 2700);
+      return `<section class="hero timer" aria-live="off">
+        <div class="hero-main"><div class="eyebrow">计时中 · 时间是上限，数字是下限</div>
+          <div class="hero-title">${u.no} ${esc(u.title)}</div>
+          <p class="hero-line">保底 ${esc(u.quota)}，做完可以继续做同一件事，直到闹钟响。</p>
+          <button class="link" data-stop>提前停止</button></div>
+        <div class="hero-side"><b data-countdown>${fmt(s)}</b></div>
+        <div class="hero-bar"><i data-bar style="width:${pct * 100}%"></i></div></section>`;
+    }
+    if (!cur) return "";
+    if (cur.steps) {
+      const st = stepAt(cur, min) || cur.steps[0], left = remaining(st, min), i = cur.steps.indexOf(st);
+      return `<section class="hero"><div class="hero-main"><div class="eyebrow">现在 · ${st.start}–${st.end} · 第 ${i + 1}/${cur.steps.length} 步</div>
+        <div class="hero-title">${esc(st.title)}</div><p class="hero-line">${esc(st.quota)}</p></div>
+        <div class="hero-side"><b>${left}</b><span>分钟</span></div></section>`;
+    }
+    const left = remaining(cur, min), total = (toMin(cur.end) - toMin(cur.start) + 1440) % 1440 || 1440;
+    if (!cur.unit) {
+      return `<section class="hero quiet"><div class="hero-main"><div class="eyebrow">现在 · ${cur.start}–${cur.end}</div>
+        <div class="hero-title">${esc(cur.title)}</div>${cur.note ? `<p class="hero-line">${esc(cur.note)}</p>` : ""}</div>
+        <div class="hero-side"><b>${left}</b><span>分钟</span></div></section>`;
+    }
+    const u = unitOf(cur.unit), done = day(k).done[cur.unit];
+    return `<section class="hero"><div class="hero-main"><div class="eyebrow">现在 · ${cur.start}–${cur.end}</div>
+      <div class="hero-title">${u.no} ${esc(u.title)}</div>
+      <p class="hero-line">${u.plan ? esc(u.plan) : `第一步：${esc(u.next?.first || u.first)}`}</p>
+      ${done ? `<p class="hero-done">✓ 已完成</p>` : `<button class="btn primary" data-start="${cur.unit}">▶ 开始 ${unitMinutes(cur.unit)} 分钟</button>`}</div>
+      <div class="hero-side"><b>${left}</b><span>分钟</span></div>
+      <div class="hero-bar"><i style="width:${(1 - left / total) * 100}%"></i></div></section>`;
+  }
   function renderDay() {
     const d = new Date(), k = today(), min = d.getHours() * 60 + d.getMinutes();
     const cur = blockAt(min), n = doneCount(k);
-    let nowCard = "";
-    if (state.timer) {
-      const u = unitOf(state.timer.unit), s = timerLeft();
-      nowCard = `<section class="now timer" aria-live="off">${ring(1 - s / (state.timer.total || 2700))}
-        <div><div class="label">计时中 · 时间是上限，数字是下限</div>
-        <div class="what">${u.no} ${esc(u.title)}</div>
-        <div class="small">保底：${esc(u.quota)}。做完了可以继续做同一件事，直到闹钟响。</div></div>
-        <div class="left">还剩<b data-countdown>${fmt(s)}</b><button class="link" data-stop>提前停止</button></div></section>`;
-    } else if (cur && cur.steps) {
-      const st = stepAt(cur, min) || cur.steps[0], left = remaining(st, min);
-      nowCard = `<section class="now" aria-live="polite">
-        <div><div class="label">现在 · ${st.start}–${st.end} · ${esc(cur.title)}</div>
-        <div class="what">${esc(st.title)}</div>
-        <div class="small">${esc(st.quota)}</div></div>
-        <div class="left">这一步还剩<b>${left} 分钟</b></div></section>`;
-    } else if (cur) {
-      const u = cur.unit ? unitOf(cur.unit) : cur;
-      const left = remaining(cur, min), total = (toMin(cur.end) - toMin(cur.start) + 1440) % 1440 || 1440;
-      const nf = u.next?.first || u.first;
-      nowCard = `<section class="now ${cur.rest ? "rest" : ""}" aria-live="polite">
-        ${cur.unit ? ring(1 - left / total) : ""}
-        <div><div class="label">现在 · ${cur.start}–${cur.end}</div>
-        <div class="what">${cur.no ? cur.no + " " : ""}${esc(cur.title)}</div>
-        ${cur.unit ? `${u.plan ? `<div class="small"><b>今天：</b>${esc(u.plan)}</div>` : ""}<div class="small">第一步：${esc(nf)}</div>` : cur.note ? `<div class="small">${esc(cur.note)}</div>` : ""}
-        ${cur.unit && !day(k).done[cur.unit] ? `<button class="btn primary go" data-start="${cur.unit}">▶ 开始 ${unitMinutes(cur.unit)} 分钟</button>` : ""}</div>
-        <div class="left">这一段还剩<b>${left} 分钟</b></div></section>`;
-    }
-    const items = C.schedule.map(b => {
-      const on = b.unit && day(k).done[b.unit];
-      const cls = ["tl", b.unit && "unit", b.rest && "rest", on && "done", b === cur && "cur"].filter(Boolean).join(" ");
-      const body = b.unit ? unitCard(b, k)
-        : `<div class="t-title">${esc(b.title)}${b.rest ? ` <span class="badge lv-rest">休息</span>` : ""}</div>
-           ${b.note ? `<div class="quota">${esc(b.note)}</div>` : ""}${b.steps ? stepsHtml(b, b === cur ? stepAt(b, min) : null) : ""}${sysLinks(b.systems)}`;
-      return `<li class="${cls}"><div class="time">${b.start}–${b.end}</div><div class="body">${body}</div></li>`;
+    const auto = state.timer ? blockIdx(UNITS.find(b => b.unit === state.timer.unit)) : cur ? blockIdx(cur) : -1;
+    const open = openIdx ?? auto;
+    const rows = C.schedule.map((b, i) => {
+      const u = b.unit ? unitOf(b.unit) : b, on = b.unit && day(k).done[b.unit];
+      const expandable = b.unit || b.steps;
+      const isOpen = expandable && open === i;
+      const meta = b.unit ? u.quota : b.steps ? b.steps.map(s => s.title.replace(/^[①②③]\s*/, "")).join(" → ") : (b.note || "");
+      const cls = ["ag", b.unit && "unit", b.rest && "rest", on && "done", b === cur && "cur", isOpen && "open"].filter(Boolean).join(" ");
+      const head = `<span class="ag-title">${b.no ? b.no + " " : ""}${esc(b.title)}</span>${meta ? `<span class="ag-meta">${esc(meta)}</span>` : ""}`;
+      return `<li class="${cls}"><span class="ag-time">${b.start}</span>
+        <div class="ag-main">${expandable ? `<button class="ag-head" data-toggle="${i}" aria-expanded="${!!isOpen}">${head}</button>` : `<div class="ag-head">${head}</div>`}
+          ${isOpen ? (b.unit ? unitDetail(b, k, b.unit === (state.timer?.unit ?? cur?.unit)) : stepsDetail(b, b === cur ? stepAt(b, min) : null)) : ""}</div>
+        ${b.unit ? `<button class="check ${on ? "on" : ""}" data-unit="${b.unit}" aria-pressed="${!!on}" aria-label="完成 ${esc(u.title)}"><span>✓</span></button>` : `<span></span>`}</li>`;
     }).join("");
-    app.innerHTML = `<h1>我的一天</h1>
-      <p class="sub">${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${WEEK[d.getDay()]} · 今天完成 ${n}/${UNITS.length} 个单位
-        ${d.getHours() >= 21 ? ` · <a href="#review">去复盘 →</a>` : ""}</p>
-      ${nowCard}<ol class="timeline">${items}</ol>
-      <section class="rules"><h2>三条红线</h2><ol>
-        <li><b>闹钟响了就停。</b>没干完也停，写下卡在哪和下次第一步。</li>
-        <li><b>连续两个 45 分钟后，彻底歇 30 分钟。</b>离开屏幕。</li>
-        <li><b>新想法先放 48 小时。</b>要加一件，先划掉一件。<a href="#review">放进冷却区 →</a></li>
-      </ol><p class="small">平时埋头干，规则周日再改。漏了不补，第二天照常。</p></section>`;
+    const dots = UNITS.map(b => `<i class="${day(k).done[b.unit] ? "on" : ""}" title="${esc(b.title)}"></i>`).join("");
+    app.innerHTML = `<div class="dayhead"><div><h1>我的一天</h1>
+        <p class="sub">${d.getMonth() + 1} 月 ${d.getDate()} 日 · 周${WEEK[d.getDay()]}${d.getHours() >= 21 ? ` · <a href="#review">去复盘</a>` : ""}</p></div>
+        <div class="dots" aria-label="今天完成 ${n}/${UNITS.length}">${dots}<span>${n}/${UNITS.length}</span></div></div>
+      ${heroCard(cur, min, k)}
+      <ol class="agenda">${rows}</ol>
+      <p class="redline"><b>红线</b><i>闹钟响了就停</i><i>两个 45 分钟后歇 30 分钟</i><i>新想法放 48 小时，加一件先划一件</i><i>规则周日再改</i></p>`;
     bindDay(k);
   }
 
@@ -242,6 +236,7 @@
     on("[data-start]", b => startTimer(b.dataset.start));
     on("[data-stop]", () => stopTimer(true));
     on("[data-clearnext]", b => { if (state.units[b.dataset.clearnext]) state.units[b.dataset.clearnext].next = null; save(); renderDay(); });
+    on("[data-toggle]", b => { const i = Number(b.dataset.toggle), cur = app.querySelector(".ag.open [data-toggle]"); openIdx = cur && Number(cur.dataset.toggle) === i ? -1 : i; renderDay(); });
   }
 
   // ---------- 定量 ----------
