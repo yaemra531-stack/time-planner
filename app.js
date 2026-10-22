@@ -342,15 +342,22 @@
   const jr = k => (state.journal[k] ||= {});
   function aiText(k) {
     const d = new Date(), dd = day(k), j = jr(k);
-    const lines = [`【时间账本 · ${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]} · 今晚复盘】`, `完成 ${doneCount(k)}/${UNITS.length} 个单位`, ""];
+    const lines = [`【时间账本 · ${d.getMonth() + 1}月${d.getDate()}日 周${WEEK[d.getDay()]} · 今晚复盘】完成 ${doneCount(k)}/${UNITS.length}`, ""];
+    const metricText = m => {
+      const v = dd[m.key], label = m.label.replace(/^今天\s*/, "");
+      if (m.latest && m.total) return `${m.totalLabel || label} ${v}/${m.total}`;
+      return `${label} ${v}${m.suffix}${m.target ? `（目标 ${m.target}${m.suffix}）` : ""}`;
+    };
     UNITS.forEach(b => {
-      const u = unitOf(b.unit), week = lastDays(7).filter(x => state.days[x]?.done?.[b.unit]).length;
-      const data = (u.metrics || []).filter(m => dd[m.key] != null).map(m => `${m.label} ${dd[m.key]}${m.suffix}`).join("，");
-      lines.push(`${u.no} ${u.title}：${dd.done[b.unit] ? "✓ 完成" : "✗ 没完成"}｜${u.plan ? `今天 ${u.plan}｜` : ""}保底 ${u.quota}${u.range ? `（范围：${u.range}）` : ""}｜${u.level}｜近7天 ${week}/7${data ? `｜今天 ${data}` : ""}`);
-      if (u.next && (u.next.stuck || u.next.first) && u.next.at === k) lines.push(`   卡在：${u.next.stuck || "—"}；下次第一步：${u.next.first || "—"}`);
+      const u = unitOf(b.unit);
+      const data = (u.metrics || []).filter(m => dd[m.key] != null && dd[m.key] !== "").map(metricText).join(" · ");
+      lines.push(`${u.no} ${u.title} ${dd.done[b.unit] ? "✓" : "✗ 没完成"}`);
+      if (u.plan) lines.push(`   计划：${u.plan}`);
+      lines.push(data ? `   数据：${data}` : `   保底：${u.quota}`);
+      if (u.next && (u.next.stuck || u.next.first) && u.next.at === k)
+        lines.push("   " + [u.next.stuck && `卡在：${u.next.stuck}`, u.next.first && `下次第一步：${u.next.first}`].filter(Boolean).join("；"));
     });
-    lines.push("", "我的想法：", j.text?.trim() || "（今天没写，直接看数据）", "",
-      "");
+    lines.push("", "我的想法：", j.text?.trim() || "（今天没写，直接看数据）", "");
     const fixes = (state.fixes || []).filter(f => f.status !== "已上线");
     lines.push(`网站待改清单（时间账本 v${C.version}）：`, ...(fixes.length ? fixes.map((f, i) => `${i + 1}. [${f.status}] ${f.text}`) : ["（空）"]), "",
       "请帮我：1）用几句话看看今天的执行情况；2）指出一个可以改进的地方；3）如果某块定量需要调整，只建议一处，我周日再改；",
